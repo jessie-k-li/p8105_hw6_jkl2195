@@ -104,6 +104,7 @@ weather_df =
 ```
 
 ```{r}
+z_value = qnorm(.975)
 tmax_boot_straps = weather_df |>
   mutate(
     strap_sample = map(id, \(i) sample_n(weather_df, size = 50, replace = TRUE)),
@@ -112,14 +113,38 @@ tmax_boot_straps = weather_df |>
     glan = map(model, broom::glance)
   ) |>
   unnest(result, glan) |>
-  select(date, tmax, tmin, prcp, model, term, pred = estimate, r.squared, std.error) |>
+  select(date, term, estimate, r.squared) |>
   pivot_wider(
     names_from = term,
-    values_from = c(pred, std.error)
-  )
+    values_from = estimate) |>
+  mutate(
+      log_product = log(tmin * prcp)
+    )
+
+r_square_CI_lower = tmax_boot_straps |> pull(r.squared) |> quantile(.025)
+r_square_CI_upper = tmax_boot_straps |> pull(r.squared) |> quantile(.975)
+
+r_square_CI_lower
+r_square_CI_upper
+
+log_CI_lower = tmax_boot_straps |> na.omit(log_product) |> pull(log_product) |> quantile(.025)
+log_CI_upper = tmax_boot_straps |> na.omit(log_product) |> pull(log_product) |> quantile(.975)
+
+log_CI_lower
+log_CI_upper
 
 ```
+```{r}
+tmax_boot_straps |>
+  ggplot(aes(x = r.squared)) +
+  geom_density()
 
+tmax_boot_straps |>
+  na.omit(log_product) |>
+  ggplot(aes(x = log_product)) +
+  geom_density()
+```
+The plot
 The boostrap is helpful when you’d like to perform inference for a parameter / value / summary that doesn’t have an easy-to-write-down distribution in the usual repeated sampling framework. We’ll focus on a simple linear regression with tmax as the response with tmin and prcp as the predictors, and are interested in the distribution of two quantities estimated from these data:
 r̂ 2
 log(β̂ 1∗β̂ 2)
@@ -135,3 +160,161 @@ Use 5000 bootstrap samples and, for each bootstrap sample, produce estimates of 
 
 
 # Problem 3
+
+```{r}
+birth_df = read_csv("data/birthweight.csv") |>
+  na.omit() |>
+  mutate(
+    babysex = recode(babysex, `1` = "male", `2` = "female"),
+    babysex = factor(babysex),
+    frace = recode(frace, `1` = "White", `2` = "Black", `3` = "Asian", `4` = "Puerto Rican", `8` = "Other", `9` = "Unknown"),
+    frace = factor(frace),
+    mrace = recode(mrace, `1` = "White", `2` = "Black", `3` = "Asian", `4` = "Puerto Rican", `8` = "Other", `9` = "Unknown"),
+    mrace = factor(mrace),
+    malform = recode(malform, `0` = "absent", `1` = "present"),
+    malform = factor(malform)
+  )
+
+```
+
+Load and clean the data for regression analysis (i.e. convert numeric to factor where appropriate, check for missing data, etc.).
+
+
+```{r}
+full_model = lm(bwt ~., data = birth_df)
+models = c()
+predictor_list = data_frame(predictor = character(), p_value = double(), id = integer())
+predictor = birth_df |>
+  select(-bwt) |>
+  colnames()
+
+# Forward Selection
+join_predictors = function(predictor_list){
+  string = ''
+  for(i in predictor_list){
+    if(string == ''){
+      string = str_c(i, " + ")
+    } else{
+      string = str_c(string, i, " + ")
+    }
+  }
+  return(string)
+}
+
+
+generate_predictors = function(dependent, predictor_list, model_df, data_df, iter){
+  value = model_df |>
+    filter(length(predictor_list |> pull(predictor)) == 0 |
+             !(predictor %in%  pull(predictor_list, predictor))) |>
+    mutate(
+      model = 
+        map(predictor, \(col) paste(dependent, 
+                                     ' ~ ', 
+                                     predictor_list |>
+                                       pull(predictor) |>
+                                       join_predictors(),
+                                     col)) |>
+        map(as.formula) |>
+        map(lm, data = data_df),
+      results = map(model, broom::glance)
+    ) |>
+    unnest(results) |>
+    na.omit(p.value) |>
+    filter(p.value != 0) |>
+    filter(p.value == min(p.value)) |>
+    select(predictor, model, p.value)
+  bind_rows(predictor_list, data_frame(predictor = value |> pull(predictor), 
+                                       model = value |> pull(model),
+                                       p_value = value |> pull(p.value), 
+                                       id = iter))
+}
+
+model_df = predictor |>
+  data_frame()
+
+for(i in 1:4){
+  predictor_list = generate_predictors(dependent = 'bwt', predictor_list, model_df, data_df = birth_df, i)
+}
+
+#lm(btw ~ Bloodclot, data = surg)
+#summary(fit1)
+```
+
+By forward selection process of 4 variables, we have selected the following predictors: `r paste(pull(predictor_list, predictor)). The forward selection stops when it reaches 4 variables. For each time, the variable is selected and tested for the most significant p.value. Then the variable is added to model and test for the next variable.
+
+```{r}
+final_model = predictor_list |>
+  filter(id == max(id)) |>
+  pull(model) |>
+  nth(1)
+
+pred = modelr::add_predictions(data = birth_df, model = final_model)
+pred = modelr::add_residuals(data = pred, model = final_model)
+
+pred |>
+  ggplot(aes(x = resid, y = pred)) +
+  geom_point() +
+  geom_line(aes(y = pred), color = "red")
+```
+
+```{r}
+cv_df = 
+  crossv_mc(birth_df, 100) 
+cv_df =
+  cv_df |> 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+
+length_gest_lm = lm(bwt ~ blength + gaweeks, data = birth_df)
+cir_length_sex_lm = lm(bwt ~ bhead + blength + babysex + bhead * blength + blength * babysex + bhead * babysex + bhead * blength * babysex, data = birth_df)
+
+cv_df = 
+  cv_df |>
+  mutate(
+    my_lm = map(train, \(df) lm(bwt ~ gaweeks + delwt + mrace + ppbmi, data = df)),
+    length_gest_lm = map(train, \(df) lm(bwt ~ blength + gaweeks, data = birth_df)),
+    cir_length_sex_lm = map(train, \(df) lm(bwt ~ bhead + blength + babysex + bhead * blength + blength * babysex + bhead * babysex + bhead * blength * babysex, data = birth_df)),
+    rmse_my = map2_dbl(my_lm, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_length_gest = map2_dbl(length_gest_lm, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_cir_length_sex = map2_dbl(cir_length_sex_lm, test, \(mod, df) rmse(model = mod, data = df))
+  )
+
+cv_df |> 
+  select(starts_with("rmse")) |> 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") |> 
+  mutate(model = fct_inorder(model)) |> 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
+
+
+Above is a plot of model residuals against fitted values
+
+This model is built by 
+Propose a regression model for birthweight. This model may be based on a hypothesized structure for the factors that underly birthweight, on a data-driven model-building process, or a combination of the two. Describe your modeling process and show a plot of model residuals against fitted values – use add_predictions and add_residuals in making this plot.
+
+Compare your model to two others:
+
+
+One using length at birth and gestational age as predictors (main effects only)
+One using head circumference, length, sex, and all interactions (including the three-way interaction) between these
+Make this comparison in terms of the cross-validated prediction error; use crossv_mc and functions in purrr as appropriate.
+```{r}
+length_gest_lm = lm(bwt ~ blength + gaweeks, data = birth_df)
+cir_length_sex_lm = lm(bwt ~ bhead + blength + babysex + bhead * blength + blength * babysex + bhead * babysex + bhead * blength * babysex, data = birth_df)
+
+train_df = 
+  birth_df |>
+  mutate(
+    my_lm = map(train, \(df) lm(bwt ~ gaweeks + delwt + mrace + ppbmi, data = df)
+  )
+```
+
+Note that although we expect your model to be reasonable, model building itself is not a main idea of the course and we don’t necessarily expect your model to be “optimal”.
+
+
+
