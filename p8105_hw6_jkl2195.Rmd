@@ -2,12 +2,15 @@
 title: "p8105_hw6_jkl2195"
 author: "Jessie Li"
 date: "2023-11-30"
-output: html_document
+output: github_document
 ---
 Import libraries
 ```{r}
 library(tidyverse)
 library(readr)
+library(modelr)
+library(mgcv)
+
 ```
 
 # Problem 1
@@ -28,7 +31,7 @@ homicide_df = read_csv("data/homicide-data.csv") |>
 
 ```
 
-Created a city_state variable that combines city and state variables, and a binary variable indicating whether the homicide is solved (1 for solved, 0 for unsolved). Omit cities Dallas, TX; Phoenix, AZ; and Kansas City, MO – these don’t report victim race. Also omit Tulsa, AL – this is a data entry mistake. For this problem, limit your analysis those for whom victim_race is white or black. Be sure that victim_age is numeric.
+Created a city_state variable that combines city and state variables, and a binary variable indicating whether the homicide is solved (1 for solved, 0 for unsolved). Omited cities Dallas, TX; Phoenix, AZ; and Kansas City, which didn’t report victim race. Tulsa, AL is dropped due to a data entry mistake. We only focus on white and black race with the highest data entries. Invalid age are dropped from the dataset.
 
 ```{r}
 solved_glm_obj = homicide_df |>
@@ -49,7 +52,7 @@ solved_glm
 ```
 
 
-For the city of Baltimore, MD, use the glm function to fit a logistic regression with resolved vs unresolved as the outcome and victim age, sex and race as predictors. Save the output of glm as an R object; apply the broom::tidy to this object; and obtain the estimate and confidence interval of the adjusted odds ratio for solving homicides comparing male victims to female victims keeping all other variables fixed.
+For the city of Baltimore, MD, used the glm function to fit a logistic regression with resolved vs unresolved as the outcome and victim age, sex and race as predictors. The odds ratio and its confidence interval are given above.
 
 ```{r}
 solved_city_glm = homicide_df |>
@@ -71,7 +74,7 @@ solved_city_glm
 ```
 
 
-Now run glm for each of the cities in your dataset, and extract the adjusted odds ratio (and CI) for solving homicides comparing male victims to female victims. Do this within a "tidy" pipeline, making use of purrr::map, list columns, and unnest as necessary to create a dataframe with estimated ORs and CIs for each city.
+Applied glm to the entire dataset by nesting. The confidence interval of the estimation is also given above.
 
 ```{r}
 solved_city_glm |>
@@ -81,14 +84,12 @@ solved_city_glm |>
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 ```
 
-Create a plot that shows the estimated ORs and CIs for each city. Organize cities according to estimated OR, and comment on the plot.
-
-For the cities with higher adjusted odds ratio, the confidence interval is larger.
+This is a plot that shows the estimated ORs and CIs for each city, which is ordered according to estimated OR.For the cities with higher adjusted odds ratio, the confidence interval is larger. Most of the cities has a confidence interval below one.
 
 
 # Problem 2
 
-Import weather data using code provided by P8105.
+
 ```{r}
 weather_df = 
   rnoaa::meteo_pull_monitors(
@@ -102,12 +103,13 @@ weather_df =
     tmax = tmax / 10) |>
   select(name, id, everything())
 ```
+Import weather data using code provided by P8105.
 
 ```{r}
 z_value = qnorm(.975)
 tmax_boot_straps = weather_df |>
   mutate(
-    strap_sample = map(id, \(i) sample_n(weather_df, size = 50, replace = TRUE)),
+    strap_sample = map(id, \(i) sample_n(weather_df, size = 5000, replace = TRUE)),
     model = map(strap_sample, \(sample) lm(tmax ~ tmin + prcp, data = sample)),
     result = map(model, broom::tidy),
     glan = map(model, broom::glance)
@@ -124,16 +126,11 @@ tmax_boot_straps = weather_df |>
 r_square_CI_lower = tmax_boot_straps |> pull(r.squared) |> quantile(.025)
 r_square_CI_upper = tmax_boot_straps |> pull(r.squared) |> quantile(.975)
 
-r_square_CI_lower
-r_square_CI_upper
-
 log_CI_lower = tmax_boot_straps |> na.omit(log_product) |> pull(log_product) |> quantile(.025)
 log_CI_upper = tmax_boot_straps |> na.omit(log_product) |> pull(log_product) |> quantile(.975)
-
-log_CI_lower
-log_CI_upper
-
 ```
+Used bootstrap 5000 times to create 5000 linear models. The model predicted maximum temperature using the minimum temperature and precipation as predictors. Out of the 5000 model, the 95% confidence interval of R square is (`r r_square_CI_lower`, `r r_square_CI_upper`), and the 95% confidence interval of log of the product of two coefficients is (`r log_CI_lower`, `r log_CI_upper`). The following shows the plots of R square and log product of coefficients of the bootstrap samples.
+
 ```{r}
 tmax_boot_straps |>
   ggplot(aes(x = r.squared)) +
@@ -144,20 +141,7 @@ tmax_boot_straps |>
   ggplot(aes(x = log_product)) +
   geom_density()
 ```
-The plot
-The boostrap is helpful when you’d like to perform inference for a parameter / value / summary that doesn’t have an easy-to-write-down distribution in the usual repeated sampling framework. We’ll focus on a simple linear regression with tmax as the response with tmin and prcp as the predictors, and are interested in the distribution of two quantities estimated from these data:
-r̂ 2
-log(β̂ 1∗β̂ 2)
-Use 5000 bootstrap samples and, for each bootstrap sample, produce estimates of these two quantities. Plot the distribution of your estimates, and describe these in words. Using the 5000 bootstrap estimates, identify the 2.5% and 97.5% quantiles to provide a 95% confidence interval for r̂ 2
- and log(β̂ 0∗β̂ 1)
-. Note: broom::glance() is helpful for extracting r̂ 2
- from a fitted regression, and broom::tidy() (with some additional wrangling) should help in computing log(β̂ 1∗β̂ 2)
-.
-
-```{r}
-
-```
-
+The plot for r square shows approximately normal distribution with mean around 0.916, validating the model as it is almost 1. The plot for the log product shows a right skewed distribution with median between -8 and -7.
 
 # Problem 3
 
@@ -177,7 +161,7 @@ birth_df = read_csv("data/birthweight.csv") |>
 
 ```
 
-Load and clean the data for regression analysis (i.e. convert numeric to factor where appropriate, check for missing data, etc.).
+Loaded and cleaned the birth weight data. This dataset contains 4342 observations and 20 variables. Notable variables includes baby's birth weight, race of the parents, mother's weight, previous history of births, baby's head circumference and smoking status. The categorical variables such as baby's sex, parent's race, etc. is recoded and factored to the corresponding value. NA values are dropped from the dataset.
 
 
 ```{r}
@@ -252,25 +236,17 @@ pred = modelr::add_predictions(data = birth_df, model = final_model)
 pred = modelr::add_residuals(data = pred, model = final_model)
 
 pred |>
-  ggplot(aes(x = resid, y = pred)) +
-  geom_point() +
-  geom_line(aes(y = pred), color = "red")
+  ggplot(aes(y = resid, x = pred)) +
+  geom_point()
 ```
+The above plot depicts a relationship between residuals and prediction of the linear model. Ideally, the scores should be randomly distributed on both sides of residual = 0. This case, the points are evenly spread on both sides of the axis, but it seems to have a concentration around residual = 0 and prediction = 3000.
 
 ```{r}
 cv_df = 
-  crossv_mc(birth_df, 100) 
-cv_df =
-  cv_df |> 
+  crossv_mc(birth_df, 100) |> 
   mutate(
     train = map(train, as_tibble),
-    test = map(test, as_tibble))
-
-length_gest_lm = lm(bwt ~ blength + gaweeks, data = birth_df)
-cir_length_sex_lm = lm(bwt ~ bhead + blength + babysex + bhead * blength + blength * babysex + bhead * babysex + bhead * blength * babysex, data = birth_df)
-
-cv_df = 
-  cv_df |>
+    test = map(test, as_tibble)) |>
   mutate(
     my_lm = map(train, \(df) lm(bwt ~ gaweeks + delwt + mrace + ppbmi, data = df)),
     length_gest_lm = map(train, \(df) lm(bwt ~ blength + gaweeks, data = birth_df)),
@@ -292,29 +268,8 @@ cv_df |>
 ```
 
 
-Above is a plot of model residuals against fitted values
+We tested our model against two other proposed models given by P8105:
+ - (Model 2) One using length at birth and gestational age as predictors (main effects only)
+ - (Model 3) One using head circumference, length, sex, and all interactions (including the three-way interaction) 
 
-This model is built by 
-Propose a regression model for birthweight. This model may be based on a hypothesized structure for the factors that underly birthweight, on a data-driven model-building process, or a combination of the two. Describe your modeling process and show a plot of model residuals against fitted values – use add_predictions and add_residuals in making this plot.
-
-Compare your model to two others:
-
-
-One using length at birth and gestational age as predictors (main effects only)
-One using head circumference, length, sex, and all interactions (including the three-way interaction) between these
-Make this comparison in terms of the cross-validated prediction error; use crossv_mc and functions in purrr as appropriate.
-```{r}
-length_gest_lm = lm(bwt ~ blength + gaweeks, data = birth_df)
-cir_length_sex_lm = lm(bwt ~ bhead + blength + babysex + bhead * blength + blength * babysex + bhead * babysex + bhead * blength * babysex, data = birth_df)
-
-train_df = 
-  birth_df |>
-  mutate(
-    my_lm = map(train, \(df) lm(bwt ~ gaweeks + delwt + mrace + ppbmi, data = df)
-  )
-```
-
-Note that although we expect your model to be reasonable, model building itself is not a main idea of the course and we don’t necessarily expect your model to be “optimal”.
-
-
-
+Model 3 has the best root mean squared error compared to all other models with range between 250 and 325. This is followed by model 2 with range 300 and 375. My model has a root square mean error between  400 and 475. This could be due to lack of interacting term in my model.
